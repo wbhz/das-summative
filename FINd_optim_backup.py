@@ -66,7 +66,6 @@ class FINDHasher:
         )
 
     def fillFloatLumaFromBufferImage(self, img, luma):
-        numCols, numRows = img.size
         rgb_image = img.convert("RGB")
         numCols, numRows = img.size
         for i in range(numRows):
@@ -169,6 +168,26 @@ class FINDHasher:
 
     @classmethod
     def boxFilter(cls, input, output, rows, cols, rowWin, colWin):
+        halfColWin = int((colWin + 2) / 2)  # 7->4, 8->5
+        halfRowWin = int((rowWin + 2) / 2)
+
+        output = np.array(output)
+        input = np.array(input)
+
+        for i in range(0, rows):
+            for j in range(0, cols):
+
+                x = np.array(np.arange(max(0, i-halfRowWin),
+                                       min(rows, i+halfRowWin)))
+                y = np.array(np.arange(max(0, j-halfColWin),
+                                       min(cols, j+halfColWin)))
+
+                arr = np.array((np.ones((y.size, x.size)) * x *
+                                rows + y.reshape(-1, 1)), dtype=int)
+                output[i*rows+j] = np.mean(input[arr.flatten()])
+
+    @classmethod
+    def boxFilter_alt(cls, input, output, rows, cols, rowWin, colWin):
         halfColWin = int((colWin + 2) / 2)  # 7->4, 8->5
         halfRowWin = int((rowWin + 2) / 2)
         for i in range(0, rows):

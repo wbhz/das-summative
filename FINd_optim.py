@@ -8,6 +8,7 @@ from PIL import Image
 from matrix import MatrixUtil
 from imagehash import ImageHash
 import numpy as np
+import bottleneck as bn
 
 
 class FINDHasher:
@@ -60,22 +61,17 @@ class FINDHasher:
         buffer16x64 = MatrixUtil.allocateMatrix(16, 64)
         buffer16x16 = MatrixUtil.allocateMatrix(16, 16)
         numCols, numRows = img.size
-        self.fillFloatLumaFromBufferImage(img, buffer1)
+        buffer1 = self.fillFloatLumaFromBufferImage(img, buffer1)
         return self.findHash256FromFloatLuma(
             buffer1, buffer2, numRows, numCols, buffer64x64, buffer16x64, buffer16x16
         )
 
     def fillFloatLumaFromBufferImage(self, img, luma):
-        rgb_image = img.convert("RGB")
-        numCols, numRows = img.size
-        for i in range(numRows):
-            for j in range(numCols):
-                r, g, b = rgb_image.getpixel((j, i))
-                luma[i * numCols + j] = (
-                    self.LUMA_FROM_R_COEFF * r
-                    + self.LUMA_FROM_G_COEFF * g
-                    + self.LUMA_FROM_B_COEFF * b
-                )
+        coeffs = np.array(
+            [self.LUMA_FROM_R_COEFF, self.LUMA_FROM_G_COEFF, self.LUMA_FROM_B_COEFF])
+        converted = np.dot(np.asarray(img), coeffs).flatten()
+        luma = converted.tolist()
+        return luma
 
     def findHash256FromFloatLuma(
             self,
@@ -90,8 +86,8 @@ class FINDHasher:
         windowSizeAlongRows = self.computeBoxFilterWindowSize(numCols)
         windowSizeAlongCols = self.computeBoxFilterWindowSize(numRows)
 
-        self.boxFilter(fullBuffer1, fullBuffer2, numRows, numCols,
-                       windowSizeAlongRows, windowSizeAlongCols)
+        fullBuffer2 = self.boxFilter(fullBuffer1, fullBuffer2, numRows, numCols,
+                                     windowSizeAlongRows, windowSizeAlongCols)
         fullBuffer1 = fullBuffer2
 
         self.decimateFloat(fullBuffer1, numRows, numCols, buffer64x64)
@@ -170,37 +166,26 @@ class FINDHasher:
     def boxFilter(cls, input, output, rows, cols, rowWin, colWin):
         halfColWin = int((colWin + 2) / 2)  # 7->4, 8->5
         halfRowWin = int((rowWin + 2) / 2)
-
-        output = np.array(output)
-        input = np.array(input)
-
-        for i in range(0, rows):
-            for j in range(0, cols):
-
-                x = np.array(np.arange(max(0, i-halfRowWin),
-                                       min(rows, i+halfRowWin)))
-                y = np.array(np.arange(max(0, j-halfColWin),
-                                       min(cols, j+halfColWin)))
-
-                arr = np.array((np.ones((y.size, x.size)) * x *
-                                rows + y.reshape(-1, 1)), dtype=int)
-                output[i*rows+j] = np.mean(input[arr.flatten()])
-
-    @classmethod
-    def boxFilter_alt(cls, input, output, rows, cols, rowWin, colWin):
-        halfColWin = int((colWin + 2) / 2)  # 7->4, 8->5
-        halfRowWin = int((rowWin + 2) / 2)
-        for i in range(0, rows):
-            for j in range(0, cols):
-                s = 0
-                xmin = max(0, i-halfRowWin)
-                xmax = min(rows, i+halfRowWin)
-                ymin = max(0, j-halfColWin)
-                ymax = min(cols, j+halfColWin)
-                for k in range(xmin, xmax):
-                    for l in range(ymin, ymax):
-                        s += input[k*rows+l]
-                output[i*rows+j] = s/((xmax-xmin)*(ymax-ymin))
+        x = np.array(input).reshape((rows, cols))
+        temp = [x]
+        matrices = []
+        for i in range(1, halfColWin):
+            temp.append(np.pad(x.astype(float), ((0, 0), (0, i)),
+                               mode='constant', constant_values=np.nan)[:, i:])
+        for i in range(1, halfColWin+1):
+            temp.append(np.pad(x.astype(float), ((0, 0), (i, 0)),
+                               mode='constant', constant_values=np.nan)[:, :-i])
+        for matrix in temp:
+            for i in range(1, halfRowWin):
+                matrices.append(np.pad(matrix.astype(
+                    float), ((0, i), (0, 0)), mode='constant', constant_values=np.nan)[i:, :])
+            for i in range(1, halfRowWin+1):
+                matrices.append(np.pad(matrix.astype(
+                    float), ((i, 0), (0, 0)), mode='constant', constant_values=np.nan)[:-i, :])
+        matrices.extend(temp)
+        means = bn.nanmean(np.array(matrices), axis=0)
+        output = means.flatten().tolist()
+        return output
 
     @classmethod
     def prettyHash(cls, hash):
